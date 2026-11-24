@@ -57,6 +57,13 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=True,
     )
     parser.add_argument("-c", "--threads", required=False, type=int, default=1)
+    parser.add_argument(
+        "-d",
+        "--download-threads",
+        required=False,
+        type=int,
+        default=4,
+    )
 
     return parser.parse_args(argv)
 
@@ -74,15 +81,22 @@ def format_secret(domain: str, secret: Secret) -> str:
     )
 
 
-def scan_domain(domain: str, status: tqdm) -> None:
+def scan_domain(domain: str, status: tqdm, download_threads: int) -> None:
     status.set_description_str(
         colored(f"scanning {domain}", "yellow", attrs=["bold"])
     )
 
     with tempfile.TemporaryDirectory() as directory:
-        with create_session() as session:
-            for bundle in get_bundles(session, domain):
-                download_bundle(session, bundle, directory)
+        with (
+            create_session() as session,
+            ThreadPoolExecutor(max_workers=download_threads) as executor,
+        ):
+            list(
+                executor.map(
+                    partial(download_bundle, session, directory=directory),
+                    get_bundles(session, domain),
+                )
+            )
 
         for secret in get_secrets(directory):
             status.write(format_secret(domain, secret))
@@ -116,7 +130,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         ThreadPoolExecutor(max_workers=arguments.threads) as executor,
     ):
         try:
-            list(executor.map(partial(scan_domain, status=status), domains))
+            list(
+                executor.map(
+                    partial(
+                        scan_domain,
+                        status=status,
+                        download_threads=arguments.download_threads,
+                    ),
+                    domains,
+                )
+            )
         except TitusError as error:
             executor.shutdown(wait=True, cancel_futures=True)
             raise SystemExit(str(error)) from error

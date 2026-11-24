@@ -2,6 +2,7 @@ import base64
 
 import pytest
 import requests
+from tqdm import tqdm
 
 from pumpkin import cli
 from pumpkin.settings import settings
@@ -54,10 +55,49 @@ def titus_found(monkeypatch):
 def scanned(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        cli, "scan_domain", lambda domain, status: calls.append(domain)
+        cli,
+        "scan_domain",
+        lambda domain, status, download_threads: calls.append(domain),
     )
 
     return calls
+
+
+class TestScanDomain:
+    def test_downloads_bundles_then_scans_once(self, monkeypatch):
+        downloaded = []
+        scanned_directories = []
+        monkeypatch.setattr(
+            cli,
+            "get_bundles",
+            lambda session, domain: iter(["a.js", "b.js", "c.js"]),
+        )
+        monkeypatch.setattr(
+            cli,
+            "download_bundle",
+            lambda session, url, directory: downloaded.append(url),
+        )
+        monkeypatch.setattr(
+            cli,
+            "get_secrets",
+            lambda path: scanned_directories.append(sorted(downloaded)) or [],
+        )
+
+        cli.scan_domain("example.com", tqdm(disable=True), 2)
+
+        assert scanned_directories == [["a.js", "b.js", "c.js"]]
+
+    def test_download_error_propagates(self, monkeypatch):
+        def fail(session, url, directory):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(
+            cli, "get_bundles", lambda session, domain: iter(["a.js"])
+        )
+        monkeypatch.setattr(cli, "download_bundle", fail)
+
+        with pytest.raises(OSError, match="disk full"):
+            cli.scan_domain("example.com", tqdm(disable=True), 2)
 
 
 class TestFormatSecret:
@@ -113,6 +153,20 @@ class TestMain:
 
         assert settings.timeout == 9
 
+    def test_download_threads_passed_to_scan(self, monkeypatch, titus_found):
+        received = []
+        monkeypatch.setattr(
+            cli,
+            "scan_domain",
+            lambda domain, status, download_threads: received.append(
+                download_threads
+            ),
+        )
+
+        cli.main(["-u", "example.com", "-d", "8", "--no-subdomains"])
+
+        assert received == [8]
+
     def test_scans_given_domain(self, titus_found, scanned):
         cli.main(["--url", "https://Example.com/path", "--no-subdomains"])
 
@@ -129,7 +183,7 @@ class TestMain:
         assert scanned == ["a.example.com"]
 
     def test_titus_error_exits(self, monkeypatch, titus_found):
-        def fail(domain, status):
+        def fail(domain, status, download_threads):
             raise TitusError("titus exploded")
 
         monkeypatch.setattr(cli, "scan_domain", fail)
