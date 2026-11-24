@@ -11,12 +11,19 @@ from pumpkin.settings import settings
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 
-def get_domain_response(domain: str, scheme: str) -> requests.Response | None:
+def create_session() -> requests.Session:
+    session = requests.Session()
+    session.headers["User-Agent"] = settings.user_agent
+
+    return session
+
+
+def get_domain_response(
+    session: requests.Session, domain: str, scheme: str
+) -> requests.Response | None:
     try:
-        response = requests.get(
-            f"{scheme}://{domain}/",
-            headers={"User-Agent": settings.user_agent},
-            timeout=settings.timeout,
+        response = session.get(
+            f"{scheme}://{domain}/", timeout=settings.timeout
         )
     except requests.RequestException:
         return None
@@ -59,13 +66,11 @@ def get_javascript_files(
             yield url.geturl()
 
 
-def download_bundle(url: str, directory: str) -> None:
+def download_bundle(
+    session: requests.Session, url: str, directory: str
+) -> None:
     try:
-        response = requests.get(
-            url,
-            headers={"User-Agent": settings.user_agent},
-            timeout=settings.timeout,
-        )
+        response = session.get(url, timeout=settings.timeout)
     except requests.RequestException:
         return
 
@@ -80,11 +85,11 @@ def download_bundle(url: str, directory: str) -> None:
         file.write(response.content)
 
 
-def get_bundles(domain: str) -> Iterator[str]:
+def get_bundles(session: requests.Session, domain: str) -> Iterator[str]:
     seen: set[str] = set()
 
     for scheme in ("https", "http"):
-        response = get_domain_response(domain, scheme)
+        response = get_domain_response(session, domain, scheme)
 
         if response is None:
             continue

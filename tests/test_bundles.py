@@ -4,6 +4,7 @@ import pytest
 import requests
 
 from pumpkin.bundles import (
+    create_session,
     download_bundle,
     get_bundles,
     get_domain_response,
@@ -34,7 +35,9 @@ class TestGetDomainResponse:
         monkeypatch.setattr(settings, "timeout", 7.0)
         requests_mock.get("https://example.com/", text="<html>")
 
-        response = get_domain_response("example.com", "https")
+        response = get_domain_response(
+            create_session(), "example.com", "https"
+        )
 
         assert response is not None
         assert response.text == "<html>"
@@ -51,7 +54,10 @@ class TestGetDomainResponse:
         )
         requests_mock.get(location, text="<html>")
 
-        assert get_domain_response("example.com", "http") is None
+        assert (
+            get_domain_response(create_session(), "example.com", "http")
+            is None
+        )
 
     def test_redirect_on_same_host(self, requests_mock):
         requests_mock.get(
@@ -61,7 +67,9 @@ class TestGetDomainResponse:
         )
         requests_mock.get("https://example.com/home", text="<html>")
 
-        response = get_domain_response("example.com", "https")
+        response = get_domain_response(
+            create_session(), "example.com", "https"
+        )
 
         assert response is not None
         assert response.url == "https://example.com/home"
@@ -69,12 +77,18 @@ class TestGetDomainResponse:
     def test_empty_body(self, requests_mock):
         requests_mock.get("https://example.com/", text="")
 
-        assert get_domain_response("example.com", "https") is None
+        assert (
+            get_domain_response(create_session(), "example.com", "https")
+            is None
+        )
 
     def test_connection_error(self, requests_mock):
         requests_mock.get("https://example.com/", exc=requests.ConnectionError)
 
-        assert get_domain_response("example.com", "https") is None
+        assert (
+            get_domain_response(create_session(), "example.com", "https")
+            is None
+        )
 
 
 class TestGetJavascriptFiles:
@@ -124,7 +138,9 @@ class TestDownloadBundle:
             headers={"Content-Type": "Application/JavaScript"},
         )
 
-        download_bundle("https://example.com/app.js", str(tmp_path))
+        download_bundle(
+            create_session(), "https://example.com/app.js", str(tmp_path)
+        )
 
         files = os.listdir(tmp_path)
         assert len(files) == 1
@@ -137,7 +153,9 @@ class TestDownloadBundle:
             headers={"Content-Type": "text/css"},
         )
 
-        download_bundle("https://example.com/style.css", str(tmp_path))
+        download_bundle(
+            create_session(), "https://example.com/style.css", str(tmp_path)
+        )
 
         assert os.listdir(tmp_path) == []
 
@@ -146,7 +164,9 @@ class TestDownloadBundle:
             "https://example.com/app.js", exc=requests.ConnectionError
         )
 
-        download_bundle("https://example.com/app.js", str(tmp_path))
+        download_bundle(
+            create_session(), "https://example.com/app.js", str(tmp_path)
+        )
 
         assert os.listdir(tmp_path) == []
 
@@ -156,7 +176,7 @@ class TestGetBundles:
         requests_mock.get("http://example.com/", text=PAGE)
         requests_mock.get("https://example.com/", text=PAGE)
 
-        assert list(get_bundles("example.com")) == [
+        assert list(get_bundles(create_session(), "example.com")) == [
             "https://example.com/static/app.js",
             "https://example.com/vendor.js?v=2",
             "https://example.com/chunk.JS?v=1",
@@ -168,7 +188,9 @@ class TestGetBundles:
             "http://example.com/", text='<script src="/a.js"></script>'
         )
 
-        assert list(get_bundles("example.com")) == ["http://example.com/a.js"]
+        assert list(get_bundles(create_session(), "example.com")) == [
+            "http://example.com/a.js"
+        ]
 
     def test_skips_empty_scheme(self, requests_mock):
         requests_mock.get("https://example.com/", text="")
@@ -176,11 +198,13 @@ class TestGetBundles:
             "http://example.com/", text='<script src="/a.js"></script>'
         )
 
-        assert list(get_bundles("example.com")) == ["http://example.com/a.js"]
+        assert list(get_bundles(create_session(), "example.com")) == [
+            "http://example.com/a.js"
+        ]
 
     def test_unreachable_domain(self, requests_mock):
         requests_mock.get("https://example.com/", exc=requests.ConnectionError)
         requests_mock.get("http://example.com/", exc=requests.ConnectionError)
 
-        assert list(get_bundles("example.com")) == []
+        assert list(get_bundles(create_session(), "example.com")) == []
         assert requests_mock.call_count == 2

@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 from termcolor import colored
 from tqdm import tqdm
 
-from pumpkin.bundles import download_bundle, get_bundles
+from pumpkin.bundles import create_session, download_bundle, get_bundles
 from pumpkin.settings import settings
 from pumpkin.subdomains import SubdomainLookupError, get_subdomains
 from pumpkin.titus import (
@@ -80,8 +80,9 @@ def scan_domain(domain: str, status: tqdm) -> None:
     )
 
     with tempfile.TemporaryDirectory() as directory:
-        for bundle in get_bundles(domain):
-            download_bundle(bundle, directory)
+        with create_session() as session:
+            for bundle in get_bundles(session, domain):
+                download_bundle(session, bundle, directory)
 
         for secret in get_secrets(directory):
             status.write(format_secret(domain, secret))
