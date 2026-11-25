@@ -1,6 +1,9 @@
+import hashlib
+import os
 import tempfile
 import warnings
 from collections.abc import Iterator
+from threading import Lock
 from urllib.parse import urljoin, urlsplit
 
 import requests
@@ -9,6 +12,21 @@ from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from pumpkin.settings import settings
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+
+
+class SeenBundles:
+    def __init__(self) -> None:
+        self.digests: set[str] = set()
+        self.lock = Lock()
+
+    def add(self, digest: str) -> bool:
+        with self.lock:
+            if digest in self.digests:
+                return False
+
+            self.digests.add(digest)
+
+        return True
 
 
 def create_session() -> requests.Session:
@@ -67,22 +85,40 @@ def get_javascript_files(
 
 
 def download_bundle(
-    session: requests.Session, url: str, directory: str
+    session: requests.Session,
+    url: str,
+    directory: str,
+    seen: SeenBundles,
 ) -> None:
     try:
-        response = session.get(url, timeout=settings.timeout)
+        response = session.get(url, timeout=settings.timeout, stream=True)
     except requests.RequestException:
         return
 
-    content_type = response.headers.get("Content-Type", "").lower()
+    with response:
+        content_type = response.headers.get("Content-Type", "").lower()
 
-    if "javascript" not in content_type:
-        return
+        if "javascript" not in content_type:
+            return
 
-    with tempfile.NamedTemporaryFile(
-        mode="wb", dir=directory, delete=False
-    ) as file:
-        file.write(response.content)
+        digest = hashlib.sha256()
+
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=directory, delete=False
+        ) as file:
+            try:
+                for chunk in response.iter_content(
+                    settings.download_chunk_size
+                ):
+                    digest.update(chunk)
+                    file.write(chunk)
+            except requests.RequestException:
+                os.unlink(file.name)
+
+                return
+
+    if not seen.add(digest.hexdigest()):
+        os.unlink(file.name)
 
 
 def get_bundles(session: requests.Session, domain: str) -> Iterator[str]:

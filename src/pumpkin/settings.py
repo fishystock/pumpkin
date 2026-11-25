@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     titus_timeout: float = 300.0
     titus_include_noisy: bool = True
     output_limit: int = 300
+    download_chunk_size: int = 65536
 
 
 settings = Settings()

@@ -4,6 +4,7 @@ import pytest
 import requests
 
 from pumpkin.bundles import (
+    SeenBundles,
     create_session,
     download_bundle,
     get_bundles,
@@ -139,7 +140,32 @@ class TestDownloadBundle:
         )
 
         download_bundle(
-            create_session(), "https://example.com/app.js", str(tmp_path)
+            create_session(),
+            "https://example.com/app.js",
+            str(tmp_path),
+            SeenBundles(),
+        )
+
+        files = os.listdir(tmp_path)
+        assert len(files) == 1
+        assert (tmp_path / files[0]).read_bytes() == content
+
+    def test_writes_across_multiple_chunks(
+        self, requests_mock, tmp_path, monkeypatch
+    ):
+        content = b"x" * 100
+        monkeypatch.setattr(settings, "download_chunk_size", 7)
+        requests_mock.get(
+            "https://example.com/app.js",
+            content=content,
+            headers={"Content-Type": "application/javascript"},
+        )
+
+        download_bundle(
+            create_session(),
+            "https://example.com/app.js",
+            str(tmp_path),
+            SeenBundles(),
         )
 
         files = os.listdir(tmp_path)
@@ -154,7 +180,10 @@ class TestDownloadBundle:
         )
 
         download_bundle(
-            create_session(), "https://example.com/style.css", str(tmp_path)
+            create_session(),
+            "https://example.com/style.css",
+            str(tmp_path),
+            SeenBundles(),
         )
 
         assert os.listdir(tmp_path) == []
@@ -165,10 +194,58 @@ class TestDownloadBundle:
         )
 
         download_bundle(
-            create_session(), "https://example.com/app.js", str(tmp_path)
+            create_session(),
+            "https://example.com/app.js",
+            str(tmp_path),
+            SeenBundles(),
         )
 
         assert os.listdir(tmp_path) == []
+
+    def test_skips_duplicate_content(self, requests_mock, tmp_path):
+        for host in ("a.example.com", "b.example.com"):
+            requests_mock.get(
+                f"https://{host}/app.js",
+                content=b"same",
+                headers={"Content-Type": "application/javascript"},
+            )
+
+        seen = SeenBundles()
+        session = create_session()
+
+        for host in ("a.example.com", "b.example.com"):
+            download_bundle(
+                session, f"https://{host}/app.js", str(tmp_path), seen
+            )
+
+        assert len(os.listdir(tmp_path)) == 1
+
+    def test_keeps_different_content(self, requests_mock, tmp_path):
+        for name in ("a", "b"):
+            requests_mock.get(
+                f"https://example.com/{name}.js",
+                content=name.encode(),
+                headers={"Content-Type": "application/javascript"},
+            )
+
+        seen = SeenBundles()
+        session = create_session()
+
+        for name in ("a", "b"):
+            download_bundle(
+                session, f"https://example.com/{name}.js", str(tmp_path), seen
+            )
+
+        assert len(os.listdir(tmp_path)) == 2
+
+
+class TestSeenBundles:
+    def test_add_reports_whether_digest_is_new(self):
+        seen = SeenBundles()
+
+        assert seen.add("abc") is True
+        assert seen.add("abc") is False
+        assert seen.add("def") is True
 
 
 class TestGetBundles:

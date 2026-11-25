@@ -8,7 +8,12 @@ from urllib.parse import urlsplit
 from termcolor import colored
 from tqdm import tqdm
 
-from pumpkin.bundles import create_session, download_bundle, get_bundles
+from pumpkin.bundles import (
+    SeenBundles,
+    create_session,
+    download_bundle,
+    get_bundles,
+)
 from pumpkin.settings import settings
 from pumpkin.subdomains import SubdomainLookupError, get_subdomains
 from pumpkin.titus import (
@@ -81,7 +86,9 @@ def format_secret(domain: str, secret: Secret) -> str:
     )
 
 
-def scan_domain(domain: str, status: tqdm, download_threads: int) -> None:
+def scan_domain(
+    domain: str, status: tqdm, download_threads: int, seen: SeenBundles
+) -> None:
     status.set_description_str(
         colored(f"scanning {domain}", "yellow", attrs=["bold"])
     )
@@ -93,7 +100,12 @@ def scan_domain(domain: str, status: tqdm, download_threads: int) -> None:
         ):
             list(
                 executor.map(
-                    partial(download_bundle, session, directory=directory),
+                    partial(
+                        download_bundle,
+                        session,
+                        directory=directory,
+                        seen=seen,
+                    ),
                     get_bundles(session, domain),
                 )
             )
@@ -124,6 +136,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(str(error)) from error
 
     domains = get_domains(arguments.domain, arguments.subdomains)
+    seen = SeenBundles()
 
     with (
         tqdm(bar_format="{desc}", dynamic_ncols=True) as status,
@@ -136,6 +149,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                         scan_domain,
                         status=status,
                         download_threads=arguments.download_threads,
+                        seen=seen,
                     ),
                     domains,
                 )
