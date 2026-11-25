@@ -26,13 +26,13 @@ class TestFetchPage:
 
         result = fetch_page(session, "example.com", "")
 
-        assert [i.domain for i in result.records] == ["a.example.com"]
-        assert result.next_state == "next"
+        assert [i.domain for i in result.domains] == ["a.example.com"]
+        assert result.next_page_state == "next"
 
-    def test_missing_next_state_is_none(self, requests_mock, session):
+    def test_missing_next_page_state_is_none(self, requests_mock, session):
         requests_mock.post(API_URL, json={"domains": []})
 
-        assert fetch_page(session, "example.com", "").next_state is None
+        assert fetch_page(session, "example.com", "").next_page_state is None
 
     def test_sends_expected_payload(self, requests_mock, session):
         requests_mock.post(API_URL, json=page([]))

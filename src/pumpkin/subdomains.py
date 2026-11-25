@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 
 import requests
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
 from pumpkin.settings import settings
 
@@ -15,10 +15,8 @@ class DomainRecord(BaseModel):
 
 
 class SubdomainPage(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    records: list[DomainRecord] = Field(alias="domains")
-    next_state: str | None = Field(default=None, alias="next_page_state")
+    domains: list[DomainRecord]
+    next_page_state: str | None = None
 
 
 def fetch_page(
@@ -56,13 +54,13 @@ def get_subdomains(domain: str) -> Iterator[str]:
         while True:
             page = fetch_page(session, domain, state)
 
-            for record in page.records:
+            for record in page.domains:
                 if record.domain not in seen_domains:
                     seen_domains.add(record.domain)
                     yield record.domain
 
-            if not page.next_state or page.next_state in seen_states:
+            if not page.next_page_state or page.next_page_state in seen_states:
                 return
 
-            seen_states.add(page.next_state)
-            state = page.next_state
+            seen_states.add(page.next_page_state)
+            state = page.next_page_state
