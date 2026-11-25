@@ -1,4 +1,7 @@
-from collections.abc import Iterator
+import mmap
+import os
+import re
+from collections.abc import Buffer, Iterator
 
 import requests
 from pydantic import BaseModel
@@ -64,3 +67,30 @@ def get_subdomains(domain: str) -> Iterator[str]:
 
             seen_states.add(page.next_page_state)
             state = page.next_page_state
+
+
+def find_subdomains(data: Buffer, domain: str) -> set[str]:
+    pattern = re.compile(
+        rb"(?<![\w.-])((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+"
+        + re.escape(domain.encode())
+        + rb")(?![\w-]|\.\w)",
+        re.IGNORECASE,
+    )
+
+    return {match.decode().lower() for match in pattern.findall(data)}
+
+
+def get_bundle_subdomains(directory: str, domain: str) -> set[str]:
+    subdomains: set[str] = set()
+
+    for entry in os.scandir(directory):
+        if not entry.stat().st_size:
+            continue
+
+        with (
+            open(entry.path, "rb") as file,
+            mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as data,
+        ):
+            subdomains |= find_subdomains(data, domain)
+
+    return subdomains

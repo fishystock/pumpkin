@@ -7,9 +7,13 @@ from pumpkin.bundles import (
     SeenBundles,
     create_session,
     download_bundle,
+    fetch_bundle,
+    find_bundle_references,
+    get_bundle_links,
     get_bundles,
     get_domain_response,
     get_javascript_files,
+    resolve_link,
 )
 from pumpkin.settings import settings
 
@@ -139,7 +143,7 @@ class TestDownloadBundle:
             headers={"Content-Type": "Application/JavaScript"},
         )
 
-        download_bundle(
+        path = download_bundle(
             create_session(),
             "https://example.com/app.js",
             str(tmp_path),
@@ -148,6 +152,7 @@ class TestDownloadBundle:
 
         files = os.listdir(tmp_path)
         assert len(files) == 1
+        assert path == str(tmp_path / files[0])
         assert (tmp_path / files[0]).read_bytes() == content
 
     def test_writes_across_multiple_chunks(
@@ -213,12 +218,16 @@ class TestDownloadBundle:
         seen = SeenBundles()
         session = create_session()
 
-        for host in ("a.example.com", "b.example.com"):
+        paths = [
             download_bundle(
                 session, f"https://{host}/app.js", str(tmp_path), seen
             )
+            for host in ("a.example.com", "b.example.com")
+        ]
 
         assert len(os.listdir(tmp_path)) == 1
+        assert paths[0] is not None
+        assert paths[1] is None
 
     def test_keeps_different_content(self, requests_mock, tmp_path):
         for name in ("a", "b"):
@@ -285,3 +294,107 @@ class TestGetBundles:
 
         assert list(get_bundles(create_session(), "example.com")) == []
         assert requests_mock.call_count == 2
+
+
+class TestResolveLink:
+    @pytest.mark.parametrize(
+        ("link", "expected"),
+        [
+            ("b.js", "https://example.com/static/b.js"),
+            ("/b.js", "https://example.com/b.js"),
+            ("//example.com/b.js", "https://example.com/b.js"),
+            ("https://other.com/b.js", None),
+            ("data:text/javascript,1", None),
+            ("http://[bad/b.js", None),
+        ],
+    )
+    def test_resolves_same_host(self, link, expected):
+        url = resolve_link(
+            "https://example.com/static/a.js", link, "example.com"
+        )
+
+        assert (url.geturl() if url else None) == expected
+
+
+class TestFindBundleReferences:
+    @pytest.mark.parametrize(
+        ("data", "expected"),
+        [
+            (b"import { a } from 'secret_file.js';", {"secret_file.js"}),
+            (b'export * from "./lib/util.mjs"', {"./lib/util.mjs"}),
+            (b"import(`/chunks/1.JS?v=2`)", {"/chunks/1.JS?v=2"}),
+            (b'require("a.js");require("a.js")', {"a.js"}),
+            (
+                b'const u = "https://cdn.x.com/lib.js"',
+                {"https://cdn.x.com/lib.js"},
+            ),
+            (b'"app.json" "a.js.map" "react" "a b.js"', set()),
+            (b"\"a.js'", set()),
+        ],
+    )
+    def test_matches(self, data, expected):
+        assert find_bundle_references(data) == expected
+
+
+class TestGetBundleLinks:
+    def test_resolves_against_bundle_and_root(self, tmp_path):
+        path = tmp_path / "bundle"
+        path.write_bytes(
+            b"import 'static/js/chunk.js';"
+            b"import 'https://other.com/x.js';"
+            b"import '/abs.js';\xff"
+        )
+
+        assert get_bundle_links(
+            str(path), "https://example.com/static/js/main.js", "example.com"
+        ) == {
+            "https://example.com/static/js/static/js/chunk.js",
+            "https://example.com/static/js/chunk.js",
+            "https://example.com/abs.js",
+        }
+
+    def test_empty_file(self, tmp_path):
+        path = tmp_path / "bundle"
+        path.write_bytes(b"")
+
+        assert (
+            get_bundle_links(str(path), "https://example.com/a.js", "x")
+            == set()
+        )
+
+
+class TestFetchBundle:
+    def test_returns_links_of_new_bundle(self, requests_mock, tmp_path):
+        requests_mock.get(
+            "https://example.com/a.js",
+            content=b"import './b.js';",
+            headers={"Content-Type": "application/javascript"},
+        )
+        seen = SeenBundles()
+        session = create_session()
+
+        links = fetch_bundle(
+            session,
+            "https://example.com/a.js",
+            "example.com",
+            str(tmp_path),
+            seen,
+        )
+
+        assert links == {"https://example.com/b.js"}
+
+    def test_skipped_bundle_has_no_links(self, requests_mock, tmp_path):
+        requests_mock.get(
+            "https://example.com/a.js", exc=requests.ConnectionError
+        )
+
+        assert (
+            fetch_bundle(
+                create_session(),
+                "https://example.com/a.js",
+                "example.com",
+                str(tmp_path),
+                SeenBundles(),
+            )
+            == set()
+        )

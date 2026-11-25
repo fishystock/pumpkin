@@ -1,4 +1,6 @@
 import base64
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import requests
@@ -56,17 +58,31 @@ def titus_found(monkeypatch):
 def scanned(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        cli,
-        "scan_domain",
-        lambda domain, status, download_threads, seen: calls.append(domain),
+        cli, "scan_domain", lambda domain, **_: calls.append(domain) or set()
     )
 
     return calls
 
 
+def scan(domain: str, discover: bool = True) -> set[str]:
+    return cli.scan_domain(
+        domain,
+        "example.com",
+        discover,
+        tqdm(disable=True),
+        2,
+        SeenBundles(),
+    )
+
+
+def write_bundle(directory: str, name: str, content: bytes) -> None:
+    with open(os.path.join(directory, name), "wb") as file:
+        file.write(content)
+
+
 class TestScanDomain:
-    def test_downloads_bundles_then_scans_once(self, monkeypatch):
-        downloaded = []
+    def test_fetches_bundles_then_scans_once(self, monkeypatch):
+        fetched = []
         scanned_directories = []
         monkeypatch.setattr(
             cli,
@@ -75,32 +91,104 @@ class TestScanDomain:
         )
         monkeypatch.setattr(
             cli,
-            "download_bundle",
-            lambda session, url, directory, seen: downloaded.append(url),
+            "fetch_bundle",
+            lambda session, url, **_: fetched.append(url) or set(),
         )
         monkeypatch.setattr(
             cli,
             "get_secrets",
-            lambda path: scanned_directories.append(sorted(downloaded)) or [],
+            lambda path: scanned_directories.append(sorted(fetched)) or [],
         )
 
-        cli.scan_domain("example.com", tqdm(disable=True), 2, SeenBundles())
+        scan("example.com")
 
         assert scanned_directories == [["a.js", "b.js", "c.js"]]
 
-    def test_download_error_propagates(self, monkeypatch):
-        def fail(session, url, directory, seen):
+    def test_follows_bundle_links(self, monkeypatch):
+        links = {"a.js": {"b.js"}, "b.js": {"a.js", "c.js"}}
+        fetched = []
+        monkeypatch.setattr(
+            cli, "get_bundles", lambda session, domain: iter(["a.js"])
+        )
+        monkeypatch.setattr(
+            cli,
+            "fetch_bundle",
+            lambda session, url, **_: (
+                fetched.append(url) or links.get(url, set())
+            ),
+        )
+        monkeypatch.setattr(cli, "get_secrets", lambda path: [])
+
+        scan("example.com")
+
+        assert sorted(fetched) == ["a.js", "b.js", "c.js"]
+
+    @pytest.mark.parametrize(
+        ("discover", "expected"), [(True, {"api.example.com"}), (False, set())]
+    )
+    def test_returns_subdomains_from_bundles(
+        self, monkeypatch, discover, expected
+    ):
+        def fetch(session, url, domain, directory, seen):
+            write_bundle(
+                directory, url, b'"https://api.example.com/" "cdn.other.com"'
+            )
+
+            return set()
+
+        monkeypatch.setattr(
+            cli, "get_bundles", lambda session, domain: iter(["a.js"])
+        )
+        monkeypatch.setattr(cli, "fetch_bundle", fetch)
+        monkeypatch.setattr(cli, "get_secrets", lambda path: [])
+
+        assert scan("www.example.com", discover) == expected
+
+    def test_fetch_error_propagates(self, monkeypatch):
+        def fail(session, url, **_):
             raise OSError("disk full")
 
         monkeypatch.setattr(
             cli, "get_bundles", lambda session, domain: iter(["a.js"])
         )
-        monkeypatch.setattr(cli, "download_bundle", fail)
+        monkeypatch.setattr(cli, "fetch_bundle", fail)
 
         with pytest.raises(OSError, match="disk full"):
-            cli.scan_domain(
-                "example.com", tqdm(disable=True), 2, SeenBundles()
-            )
+            scan("example.com")
+
+
+class TestCrawl:
+    def test_follows_each_discovery_once(self):
+        discoveries = {
+            "a": {"b", "c"},
+            "b": {"a", "c"},
+            "c": {"d"},
+        }
+        calls = []
+
+        def work(item):
+            calls.append(item)
+
+            return discoveries.get(item, set())
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            cli.crawl(executor, iter(["a"]), work)
+
+        assert sorted(calls) == ["a", "b", "c", "d"]
+
+    def test_empty(self):
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            cli.crawl(executor, [], lambda item: {item})
+
+    def test_error_propagates(self):
+        def work(item):
+            raise TitusError("boom")
+
+        with (
+            ThreadPoolExecutor(max_workers=2) as executor,
+            pytest.raises(TitusError, match="boom"),
+        ):
+            cli.crawl(executor, ["a"], work)
 
 
 class TestFormatSecret:
@@ -161,8 +249,8 @@ class TestMain:
         monkeypatch.setattr(
             cli,
             "scan_domain",
-            lambda domain, status, download_threads, seen: received.append(
-                download_threads
+            lambda domain, download_threads, **_: (
+                received.append(download_threads) or set()
             ),
         )
 
@@ -186,7 +274,7 @@ class TestMain:
         assert scanned == ["a.example.com"]
 
     def test_titus_error_exits(self, monkeypatch, titus_found):
-        def fail(domain, status, download_threads, seen):
+        def fail(domain, **_):
             raise TitusError("titus exploded")
 
         monkeypatch.setattr(cli, "scan_domain", fail)

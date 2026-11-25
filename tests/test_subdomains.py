@@ -2,7 +2,13 @@ import pytest
 import requests
 
 from pumpkin.settings import settings
-from pumpkin.subdomains import SubdomainLookupError, fetch_page, get_subdomains
+from pumpkin.subdomains import (
+    SubdomainLookupError,
+    fetch_page,
+    find_subdomains,
+    get_bundle_subdomains,
+    get_subdomains,
+)
 
 API_URL = settings.subdomains_api_url
 
@@ -147,3 +153,44 @@ class TestGetSubdomains:
             next(results)
 
         assert requests_mock.call_count == 2
+
+
+class TestFindSubdomains:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            (b'fetch("https://api.example.com/v1")', {"api.example.com"}),
+            (b"const h = 'a.b.example.com';", {"a.b.example.com"}),
+            (b"see API.Example.COM.", {"api.example.com"}),
+            (
+                b"x.example.com y.example.com x.example.com",
+                {
+                    "x.example.com",
+                    "y.example.com",
+                },
+            ),
+            (b"https://example.com/", set()),
+            (b"notexample.com", set()),
+            (b"api.example.com.evil.com", set()),
+            (b"cdn.other.com", set()),
+            (b"*.example.com", set()),
+            (b"api.example.community", set()),
+        ],
+    )
+    def test_matches(self, text, expected):
+        assert find_subdomains(text, "example.com") == expected
+
+
+class TestGetBundleSubdomains:
+    def test_unions_files(self, tmp_path):
+        (tmp_path / "a").write_bytes(b"\xff\xfe'a.example.com'\xff")
+        (tmp_path / "b").write_bytes(b"//b.example.com/x")
+        (tmp_path / "c").write_bytes(b"")
+
+        assert get_bundle_subdomains(str(tmp_path), "example.com") == {
+            "a.example.com",
+            "b.example.com",
+        }
+
+    def test_empty_directory(self, tmp_path):
+        assert get_bundle_subdomains(str(tmp_path), "example.com") == set()

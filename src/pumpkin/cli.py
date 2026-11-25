@@ -1,7 +1,12 @@
 import argparse
 import tempfile
-from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    Executor,
+    ThreadPoolExecutor,
+    wait,
+)
 from functools import partial
 from urllib.parse import urlsplit
 
@@ -11,11 +16,15 @@ from tqdm import tqdm
 from pumpkin.bundles import (
     SeenBundles,
     create_session,
-    download_bundle,
+    fetch_bundle,
     get_bundles,
 )
 from pumpkin.settings import settings
-from pumpkin.subdomains import SubdomainLookupError, get_subdomains
+from pumpkin.subdomains import (
+    SubdomainLookupError,
+    get_bundle_subdomains,
+    get_subdomains,
+)
 from pumpkin.titus import (
     Secret,
     TitusError,
@@ -107,9 +116,36 @@ def format_secret(domain: str, secret: Secret) -> str:
     )
 
 
-def scan_domain(
-    domain: str, status: tqdm, download_threads: int, seen: SeenBundles
+def crawl(
+    executor: Executor,
+    items: Iterable[str],
+    work: Callable[[str], set[str]],
 ) -> None:
+    initial = list(items)
+    seen = set(initial)
+    pending = {executor.submit(work, item) for item in initial}
+
+    try:
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+
+            for future in done:
+                for item in future.result() - seen:
+                    seen.add(item)
+                    pending.add(executor.submit(work, item))
+    except BaseException:
+        executor.shutdown(wait=True, cancel_futures=True)
+        raise
+
+
+def scan_domain(
+    domain: str,
+    root: str,
+    discover: bool,
+    status: tqdm,
+    download_threads: int,
+    seen: SeenBundles,
+) -> set[str]:
     status.set_description_str(
         colored(f"scanning {domain}", "yellow", attrs=["bold"])
     )
@@ -119,20 +155,25 @@ def scan_domain(
             create_session() as session,
             ThreadPoolExecutor(max_workers=download_threads) as executor,
         ):
-            list(
-                executor.map(
-                    partial(
-                        download_bundle,
-                        session,
-                        directory=directory,
-                        seen=seen,
-                    ),
-                    get_bundles(session, domain),
-                )
+            crawl(
+                executor,
+                get_bundles(session, domain),
+                partial(
+                    fetch_bundle,
+                    session,
+                    domain=domain,
+                    directory=directory,
+                    seen=seen,
+                ),
             )
 
         for secret in get_secrets(directory):
             status.write(format_secret(domain, secret))
+
+        if not discover:
+            return set()
+
+        return get_bundle_subdomains(directory, root)
 
 
 def get_domains(domain: str, subdomains: bool) -> list[str]:
@@ -170,19 +211,19 @@ def main(argv: Sequence[str] | None = None) -> None:
         ThreadPoolExecutor(max_workers=arguments.threads) as executor,
     ):
         try:
-            list(
-                executor.map(
-                    partial(
-                        scan_domain,
-                        status=status,
-                        download_threads=arguments.download_threads,
-                        seen=seen,
-                    ),
-                    domains,
-                )
+            crawl(
+                executor,
+                domains,
+                partial(
+                    scan_domain,
+                    root=arguments.domain,
+                    discover=arguments.subdomains,
+                    status=status,
+                    download_threads=arguments.download_threads,
+                    seen=seen,
+                ),
             )
         except TitusError as error:
-            executor.shutdown(wait=True, cancel_futures=True)
             raise SystemExit(str(error)) from error
 
         status.set_description_str(

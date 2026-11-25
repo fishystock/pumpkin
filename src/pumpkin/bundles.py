@@ -1,10 +1,12 @@
 import hashlib
+import mmap
 import os
+import re
 import tempfile
 import warnings
-from collections.abc import Iterator
+from collections.abc import Buffer, Iterator
 from threading import Lock
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import SplitResult, urljoin, urlsplit
 
 import requests
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
@@ -57,6 +59,21 @@ def get_domain_response(
     return response
 
 
+def resolve_link(base: str, link: str, domain: str) -> SplitResult | None:
+    try:
+        url = urlsplit(urljoin(base, link))
+    except ValueError:
+        return None
+
+    if url.scheme not in ("http", "https"):
+        return None
+
+    if url.hostname != domain:
+        return None
+
+    return url
+
+
 def get_javascript_files(
     domain: str, response: requests.Response
 ) -> Iterator[str]:
@@ -66,16 +83,9 @@ def get_javascript_files(
     for tag_name, attribute in selectors:
         for tag in soup.find_all(name=tag_name, attrs={attribute: True}):
             link = str(tag.attrs.get(attribute))
+            url = resolve_link(response.url, link, domain)
 
-            try:
-                url = urlsplit(urljoin(response.url, link))
-            except ValueError:
-                continue
-
-            if url.scheme not in ("http", "https"):
-                continue
-
-            if url.hostname != domain:
+            if url is None:
                 continue
 
             if tag_name == "link" and not url.path.lower().endswith(".js"):
@@ -89,17 +99,17 @@ def download_bundle(
     url: str,
     directory: str,
     seen: SeenBundles,
-) -> None:
+) -> str | None:
     try:
         response = session.get(url, timeout=settings.timeout, stream=True)
     except requests.RequestException:
-        return
+        return None
 
     with response:
         content_type = response.headers.get("Content-Type", "").lower()
 
         if "javascript" not in content_type:
-            return
+            return None
 
         digest = hashlib.sha256()
 
@@ -115,10 +125,63 @@ def download_bundle(
             except requests.RequestException:
                 os.unlink(file.name)
 
-                return
+                return None
 
     if not seen.add(digest.hexdigest()):
         os.unlink(file.name)
+
+        return None
+
+    return file.name
+
+
+def find_bundle_references(data: Buffer) -> set[str]:
+    pattern = re.compile(
+        rb"([\"'`])([^\"'`\s!?=<>(){}\[\]|*\\]+?\.m?js(?:\?[^\"'`\s!]*)?)\1",
+        re.IGNORECASE,
+    )
+
+    return {
+        match.group(2).decode("utf-8", errors="replace")
+        for match in pattern.finditer(data)
+    }
+
+
+def get_bundle_links(path: str, url: str, domain: str) -> set[str]:
+    if not os.path.getsize(path):
+        return set()
+
+    with (
+        open(path, "rb") as file,
+        mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as data,
+    ):
+        references = find_bundle_references(data)
+
+    links: set[str] = set()
+
+    for reference in references:
+        for base in (url, urljoin(url, "/")):
+            link = resolve_link(base, reference, domain)
+
+            if link is not None:
+                links.add(link.geturl())
+
+    return links
+
+
+def fetch_bundle(
+    session: requests.Session,
+    url: str,
+    domain: str,
+    directory: str,
+    seen: SeenBundles,
+) -> set[str]:
+    path = download_bundle(session, url, directory, seen)
+
+    if path is None:
+        return set()
+
+    return get_bundle_links(path, url, domain)
 
 
 def get_bundles(session: requests.Session, domain: str) -> Iterator[str]:
