@@ -50,24 +50,45 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         dest="domain",
         required=True,
         type=parse_domain,
+        help="target domain or url to scan",
     )
     parser.add_argument(
-        "-t", "--timeout", required=False, type=float, default=None
+        "-t",
+        "--timeout",
+        type=float,
+        help="request timeout in seconds",
+    )
+    parser.add_argument(
+        "-a",
+        "--user-agent",
+        help="user agent header sent with every request",
+    )
+    parser.add_argument(
+        "-r",
+        "--reduce-noise",
+        action=argparse.BooleanOptionalAction,
+        help="enable noisey titus detection rules",
     )
     parser.add_argument(
         "-s",
         "--subdomains",
-        required=False,
         action=argparse.BooleanOptionalAction,
         default=True,
+        help="scan discovered subdomains",
     )
-    parser.add_argument("-c", "--threads", required=False, type=int, default=1)
+    parser.add_argument(
+        "-c",
+        "--threads",
+        type=int,
+        default=1,
+        help="number of domains to scan concurrently",
+    )
     parser.add_argument(
         "-d",
         "--download-threads",
-        required=False,
         type=int,
         default=4,
+        help="concurrent javascript downloads per domain",
     )
 
     return parser.parse_args(argv)
@@ -129,6 +150,12 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     if arguments.timeout is not None:
         settings.timeout = arguments.timeout
+
+    if arguments.user_agent is not None:
+        settings.user_agent = arguments.user_agent
+
+    if arguments.reduce_noise is not None:
+        settings.titus_include_noisy = not arguments.reduce_noise
 
     try:
         get_installation_path()
