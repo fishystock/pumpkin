@@ -12,7 +12,7 @@ class Settings(BaseSettings):
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     )
     subdomains_api_url: str = "https://ip.thc.org/api/v1/lookup/subdomains"
-    subdomains_page_size: int = 10
+    subdomains_page_size: int = 100
     titus_binary: str = "titus"
     titus_timeout: float = 300.0
     titus_include_noisy: bool = True
