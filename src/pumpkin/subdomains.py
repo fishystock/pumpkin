@@ -24,7 +24,7 @@ def fetch_page(
 ) -> SubdomainPage:
     try:
         response = session.post(
-            str(settings.subdomains_api_url),
+            settings.subdomains_api_url,
             headers={
                 "Accept": "application/json",
                 "User-Agent": settings.user_agent,

@@ -4,7 +4,7 @@ import requests
 from pumpkin.settings import settings
 from pumpkin.subdomains import SubdomainLookupError, fetch_page, get_subdomains
 
-API_URL = str(settings.subdomains_api_url)
+API_URL = settings.subdomains_api_url
 
 
 def page(domains: list[str], next_state: str = "") -> dict:

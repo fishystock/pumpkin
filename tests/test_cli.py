@@ -130,7 +130,7 @@ class TestGetDomains:
         assert requests_mock.call_count == 0
 
     def test_lookup_failure_exits(self, requests_mock):
-        requests_mock.post(str(settings.subdomains_api_url), status_code=500)
+        requests_mock.post(settings.subdomains_api_url, status_code=500)
 
         with pytest.raises(SystemExit, match="lookup failed"):
             cli.get_domains("example.com", True)
@@ -177,7 +177,7 @@ class TestMain:
 
     def test_scans_every_subdomain(self, titus_found, scanned, requests_mock):
         requests_mock.post(
-            str(settings.subdomains_api_url),
+            settings.subdomains_api_url,
             json={"domains": [{"domain": "a.example.com"}]},
         )
 
