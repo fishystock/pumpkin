@@ -48,6 +48,18 @@ def parse_domain(target: str) -> str:
     return hostname
 
 
+def parse_header(header: str) -> tuple[str, str]:
+    name, separator, value = header.partition(":")
+    name = name.strip()
+
+    if not separator or not name:
+        raise argparse.ArgumentTypeError(
+            f"expected 'Name: value', got {header!r}"
+        )
+
+    return name, value.strip()
+
+
 def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="pumpkin",
@@ -71,6 +83,14 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "-a",
         "--user-agent",
         help="user agent header sent with every request",
+    )
+    parser.add_argument(
+        "-H",
+        "--header",
+        dest="headers",
+        action="append",
+        type=parse_header,
+        help="extra 'Name: value' header sent to targets, repeatable",
     )
     parser.add_argument(
         "-r",
@@ -194,6 +214,9 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     if arguments.user_agent is not None:
         settings.user_agent = arguments.user_agent
+
+    if arguments.headers is not None:
+        settings.headers = dict(arguments.headers)
 
     if arguments.reduce_noise is not None:
         settings.titus_include_noisy = not arguments.reduce_noise

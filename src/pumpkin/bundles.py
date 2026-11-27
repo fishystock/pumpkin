@@ -34,6 +34,7 @@ class SeenBundles:
 def create_session() -> requests.Session:
     session = requests.Session()
     session.headers["User-Agent"] = settings.user_agent
+    session.headers.update(settings.headers)
 
     return session
 

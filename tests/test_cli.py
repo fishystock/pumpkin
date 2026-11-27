@@ -48,6 +48,30 @@ class TestParseArguments:
 
         assert arguments.subdomains is False
 
+    def test_headers_are_repeatable(self):
+        arguments = cli.parse_arguments(
+            [
+                "-u",
+                "example.com",
+                "-H",
+                "X-HackerOne-Username: blah blah",
+                "--header",
+                "X-Other:value:with:colons",
+            ]
+        )
+
+        assert arguments.headers == [
+            ("X-HackerOne-Username", "blah blah"),
+            ("X-Other", "value:with:colons"),
+        ]
+
+    @pytest.mark.parametrize("header", ["no-separator", ": value"])
+    def test_rejects_malformed_header(self, header, capsys):
+        with pytest.raises(SystemExit):
+            cli.parse_arguments(["-u", "example.com", "-H", header])
+
+        assert "argument -H/--header:" in capsys.readouterr().err
+
 
 @pytest.fixture
 def titus_found(monkeypatch):
@@ -243,6 +267,13 @@ class TestMain:
         cli.main(["-u", "example.com", "-t", "9", "--no-subdomains"])
 
         assert settings.timeout == 9
+
+    def test_headers_override_setting(self, monkeypatch, titus_found, scanned):
+        monkeypatch.setattr(settings, "headers", {})
+
+        cli.main(["-u", "example.com", "-H", "X-Test: 1", "--no-subdomains"])
+
+        assert settings.headers == {"X-Test": "1"}
 
     def test_download_threads_passed_to_scan(self, monkeypatch, titus_found):
         received = []

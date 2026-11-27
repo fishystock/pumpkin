@@ -35,6 +35,20 @@ def page(requests_mock, url: str, text: str = PAGE) -> requests.Response:
     return requests.get(url)
 
 
+class TestCreateSession:
+    def test_sends_custom_headers(self, monkeypatch):
+        monkeypatch.setattr(
+            settings,
+            "headers",
+            {"X-HackerOne-Username": "blah", "User-Agent": "custom"},
+        )
+
+        session = create_session()
+
+        assert session.headers["X-HackerOne-Username"] == "blah"
+        assert session.headers["User-Agent"] == "custom"
+
+
 class TestGetDomainResponse:
     def test_returns_response(self, requests_mock, monkeypatch):
         monkeypatch.setattr(settings, "timeout", 7.0)
